@@ -3,6 +3,8 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import numpy as np
 import cmocean
+from functools import cached_property
+from scipy import interpolate
 
 class Experiment():
     def __init__(self, folder):
@@ -31,6 +33,13 @@ class Experiment():
                          'nav_lat_grid_T': 'latT', 'nav_lon_grid_T': 'lonT',
                          'nav_lat_grid_U': 'latU', 'nav_lon_grid_U': 'lonU',
                          'nav_lat_grid_V': 'latV', 'nav_lon_grid_V': 'lonV'})
+        dx = float(self.mask.e1t[0,0,0])
+        self.ds['xT'] = self.ds['xT'] * dx - dx/2
+        self.ds['xU'] = self.ds['xU'] * dx
+        self.ds['xV'] = self.ds['xV'] * dx - dx/2
+        self.ds['yT'] = self.ds['yT'] * dx - dx/2
+        self.ds['yU'] = self.ds['yU'] * dx - dx/2
+        self.ds['yV'] = self.ds['yV'] * dx
         return
     
     @property
@@ -62,21 +71,42 @@ class Experiment():
         return self.ds.veltempy
     
     @property
-    def vabs(self):
-        return np.sqrt(self.u2.data + self.v2.data) + self.T*0
+    def uzonal_barotropic(self):
+        U = (remesh(self.u,self.T) - remesh(self.v,self.T)) / np.sqrt(2)
+        return self.mean_z(U)
     
-    @property
+    @cached_property
+    def uzonal_section(self):
+        U = (remesh(self.u,self.T) - remesh(self.v,self.T)) / np.sqrt(2)
+        x = U.lonT.data
+        y = U.latT.data
+        z = U.data
+
+        Lat = np.linspace(20,40,100)
+        Lon = -75
+        u = np.zeros((z.shape[0],Lat.shape[0]))
+        for k in range(z.shape[0]):
+            f = interpolate.LinearNDInterpolator(list(zip(x.ravel(),y.ravel())),z[k].ravel())
+            u[k,:] = f(Lon,Lat)
+        return xr.DataArray(u, dims=('depth', 'lat'), coords={'lat': Lat, 'depth': U.deptht.data})
+    
+    @cached_property
+    def vabs(self):
+        return np.sqrt(remesh(self.u2,self.T) + remesh(self.v2,self.T))
+    
+    @cached_property
     def EKE(self):
         field = self.u2.data + self.v2.data - self.u.data**2 - self.v.data**2
         field = 0.5 * field + self.T*0
         return field
     
-    @property
+    @cached_property
     def EKEz(self):
         return self.EKE.isel(xT=slice(1,-1), yT=slice(1,-1)).mean(['xT', 'yT'])
     
-    @property
+    @cached_property
     def MOC(self):
+        print('Computing MOC!')
         Vmerid = self.meridional_flux(self.u, self.v)
         Psi = 0 * Vmerid
 
@@ -88,8 +118,9 @@ class Experiment():
         
         return Psi / 1.e+6 # to Sverdrups 
     
-    @property
+    @cached_property
     def heat_flux2d(self):
+        print('Computing heat flux!')
         Qx = self.Tu.data - self.u.data * T_to_u(self.T.data)
         Qy = self.Tv.data - self.v.data * T_to_v(self.T.data)
         
@@ -104,7 +135,7 @@ class Experiment():
 
         return self.meridional_flux(Qx, Qy)
     
-    @property
+    @cached_property
     def heat_flux(self):
         return self.integrate_z(self.heat_flux2d)
     
@@ -123,7 +154,7 @@ class Experiment():
                 divQ[:,j,i] = (Qx[:,j,i] - Qx[:,j,i-1]) / grid_step \
                             + (Qy[:,j,i] - Qy[:,j-1,i]) / grid_step
 
-        llat = np.linspace(np.min(lat),np.max(lat), Nlat)
+        llat = np.linspace(15.35,49.38, Nlat)
 
         Q = np.zeros((Nlat,nz))
         for ilat in range(Nlat):
@@ -178,7 +209,6 @@ class Experiment():
         fun = field.plot.contourf if 'levels' in kw else field.plot
 
         fun(x=lon, y=lat, 
-            aspect=1, size=4,
             cmap=cmocean.cm.balance, **kw)
         plt.gca().set_aspect(aspect=1)
         plt.xlabel('Longitude')
@@ -187,7 +217,7 @@ class Experiment():
     def plot_EKE(self, **kw):
         self.EKE.isel(deptht=0,xT=slice(1,-1), yT=slice(1,-1)).plot.contourf(x='lonT', y='latT', 
             levels=np.linspace(0,0.3,11), vmin=0, cmap=cmocean.cm.balance, 
-            vmax=0.4,  aspect=1, size=4, 
+            vmax=0.4,
             cbar_kwargs = {'label': 'EKE, $m^2/s^2$'}, **kw)
         plt.gca().set_aspect(aspect=1)
         plt.xlabel('Longitude')
@@ -208,34 +238,113 @@ class Experiment():
         plt.title('Lateral mean EKE')
         plt.xticks([0,0.005,0.01,0.015,0.02,0.025,0.03],['0','0.005','0.01','0.015', '0.02', '0.025', '0.03']);
     
-    def plot_SST(self, **kw):
-        T = self.T.isel(deptht=0).isel(xT=slice(1,-1), yT=slice(1,-1))
+    def plot_SST(self, target=None, **kw):
+        '''
+        If target is not none, Error,
+        self.T - target.T
+        is computed
+        '''
+        if target is None:
+            T = self.T
+        else:
+            T = self.T - remesh(target.T,self.T)
+        T = T.isel(deptht=0).isel(xT=slice(1,-1), yT=slice(1,-1))
+
+        levels = np.arange(8,30,1) if target is None else np.linspace(-3,3,11)
+        
         T.plot.contourf(x='lonT', y='latT', 
-            levels=np.arange(8,30,1), vmin=11, vmax=24, 
-            cmap=cmocean.cm.balance, aspect=1, size=4, 
+            levels=levels, vmin=11, vmax=24, 
+            cmap=cmocean.cm.balance,
             cbar_kwargs = {'label': 'SST, $^oC$'}, **kw)
         Cplot = T.plot.contour(x='lonT', y='latT',
-            levels=np.arange(8,30,1), colors='k', linewidths=0.5)
+            levels=levels, colors='k', linewidths=0.5)
         plt.gca().set_aspect(aspect=1)
         plt.gca().clabel(Cplot, Cplot.levels)
         plt.xlabel('Longitude')
         plt.ylabel('Latitude')    
         plt.title('SST')
 
-    def plot_MOC_heat(self):
-        self.heat_flux2d.plot.contourf(
+    def plot_SSH(self, target=None, **kw):
+        if target is None:
+            T = self.ds.sossheig
+        else:
+            T = self.ds.sossheig - remesh(target.ds.sossheig,self.ds.sossheig)
+
+        T = T.isel(xT=slice(1,-1), yT=slice(1,-1))
+        T.plot.contourf(x='lonT', y='latT', 
+            levels=np.linspace(-0.6,0.6,9),
+            cmap=cmocean.cm.balance,
+            cbar_kwargs = {'label': 'SSH, $m$'}, **kw)
+        Cplot = T.plot.contour(x='lonT', y='latT',
+            levels=np.linspace(-0.6,0.6,9), colors='k', linewidths=0.5)
+        plt.gca().set_aspect(aspect=1)
+        plt.gca().clabel(Cplot, Cplot.levels)
+        plt.xlabel('Longitude')
+        plt.ylabel('Latitude')    
+        plt.title('SSH')
+
+    def plot_uzonal(self, target = None):
+        if target is None:
+            uzonal = self.uzonal_barotropic
+        else:
+            uzonal = self.uzonal_barotropic - remesh(target.uzonal_barotropic,self.uzonal_barotropic)
+        uzonal = uzonal.isel(xT=slice(1,-1), yT=slice(1,-1))
+
+        uzonal.plot.contourf(x='lonT', y='latT', 
+            levels=np.linspace(-0.1,0.1,9),
+            cmap=cmocean.cm.balance,
+            cbar_kwargs = {'label': 'Barotropic zonal velocity, $m/s$'})
+        #Cplot = uzonal.plot.contour(x='lonU', y='latU',
+        #    levels=np.linspace(-0.1,0.1,9), colors='k', linewidths=0.5)
+        plt.gca().set_aspect(aspect=1)
+        #plt.gca().clabel(Cplot, Cplot.levels)
+        plt.xlabel('Longitude')
+        plt.ylabel('Latitude')    
+        
+
+    def plot_MOC_heat(self, target=None):
+        if target is None:
+            heat_flux2d = self.heat_flux2d
+            MOC = self.MOC
+        else:
+            heat_flux2d = self.heat_flux2d - target.heat_flux2d
+            MOC = self.MOC - target.MOC
+
+        heat_flux2d.plot.contourf(
                 x='lat', y='depth', levels=np.linspace(-2.5e+11,2.5e+11,11),
-                vmin=-2.5e+11, vmax=2.5e+11, cmap=cmocean.cm.balance)
-        Cplot = self.MOC.plot.contour(x='lat', y='depth', levels=np.linspace(-5,5,21), colors='k', linewidths=0.5)
+                vmin=-2.5e+11, vmax=2.5e+11, cmap=cmocean.cm.balance,
+                cbar_kwargs = {'label': 'Eddy Meridional Heat Flux, $W/m$'})
+        Cplot = MOC.plot.contour(x='lat', y='depth', levels=np.linspace(-5,5,21), colors='k', linewidths=0.5)
         plt.gca().clabel(Cplot, 
             [-3.0,-2.0,-1.5,-1.0,-0.5,0.0,0.5,1.0,2.0],
             fmt={-3.0: '-3', -2.0: '-2', -1.5: '-1.5', -1.0: '-1', -0.5: '-0.5', 0.0: '0', 0.5: '0.5', 1.0: '1', 2.0: '2'})
         plt.ylim(4000,5)
+        plt.xticks([20,25,30,35,40,45])
         plt.yscale('log')
         plt.xlabel('Latitude')
         plt.ylabel('Depth, m')
-    
 
+    def plot_uzonal_section(self, target=None):
+        if target is None:
+            uzonal = self.uzonal_section
+        else:
+            uzonal = self.uzonal_section - target.uzonal_section
+        
+        uzonal.plot.contourf(x='lat', y='depth',
+            levels=np.linspace(-0.4,0.4,17),
+            cmap=cmocean.cm.balance,
+            cbar_kwargs = {'label': 'Zonal velocity, $m/s$'})
+        Cplot = uzonal.plot.contour(x='lat', y='depth',
+            levels=np.linspace(-0.4,0.4,17), colors='k', linewidths=0.5)
+        plt.gca().clabel(Cplot, Cplot.levels[0:None:2])
+        plt.ylim(1000,5)
+        plt.xticks([20,25,30,35,40])
+        plt.xlim([20,38])
+        #plt.yscale('log')
+        plt.yticks([0, 200, 400, 600, 800, 1000], ['0', '200', '400', '600', '800', '1000'])
+        plt.xlabel('Latitude at 75W')
+        plt.ylabel('Depth, m')
+        
 def lon(field):
     for lon_out in ['lonT', 'lonU', 'lonV']:
         if lon_out in field.coords:
@@ -283,8 +392,18 @@ def T_to_v(T):
         v[:,j,:] = 0.5 * (T[:,j,:] + T[:,j+1,:])
     return v
 
-# def remesh(field, target):
-#     x_out, y_out, depth_out = x(target), y(target), depth(target)
-#     x_in, y_in, depth_in = x(field), y(field), depth(field)
-#     print(x_out, y_out, depth_out)
-#     return field.interp({x_in: target[x_out], y_in: target[y_out], depth_in: target[depth_out]}, method='linear')
+def remesh(field, target):
+    x_out, y_out = x(target), y(target)
+    x_in, y_in = x(field), y(field)
+    nfactor = int(np.floor(field[x_in].shape[0]/target[x_out].shape[0]))
+    if nfactor > 1:
+        field = field.fillna(0).coarsen({x_in: nfactor, y_in: nfactor}, boundary='pad').mean()
+        x_in, y_in = x(field), y(field)
+
+    out = field.interp({x_in: target[x_out], y_in: target[y_out]}, method='linear').fillna(0)
+    out[lat(target)] = target[lat(target)]
+    out[lon(target)] = target[lon(target)]
+    if depth(field) in field.coords:
+        out = out.rename({depth(out): depth(target)})
+        out[depth(target)] = target[depth(target)]
+    return out
