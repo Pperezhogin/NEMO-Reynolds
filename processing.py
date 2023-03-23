@@ -190,20 +190,3 @@ def compute_flux(file360d='GYRE_360d_00010101_00301230_ocean.nc', filemask='mesh
 
     Psi_MOC = MOC(u, v, lat, 26500, e3t, Nlat = 100)
     return llat, depth, Qlat, Q, Psi_MOC
-
-if __name__ == '__main__':
-    # ------------------ script -------------------
-    # number of subplots along x and y
-    sub_x = 3
-    sub_y = 3
-    plt.figure(figsize = (22,18), dpi = 300)
-
-    plot_energy(1)
-    plot_surf_EKE(2)
-    plot_z_EKE(3)
-    plot_SST(4)
-    plot_snapshot_vorticity(5)
-    plot_flux(6,7)
-
-    plt.draw()
-    plt.savefig('result.pdf')
