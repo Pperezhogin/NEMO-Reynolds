@@ -9,7 +9,8 @@ class Experiment():
         self.folder = folder
         for j, file in enumerate(['GYRE_360d_00010101_00301230_ocean.nc', 
             'GYRE_7200d_00010101_01210105_UVTgrids.nc', 
-            'GYRE_7200d_00010101_00210102_UVTgrids.nc']):
+            'GYRE_7200d_00010101_00210102_UVTgrids.nc', 
+            'GYRE_7200d_00010101_00210105_UVTgrids.nc']):
             path = os.path.join(folder, file)
             if os.path.exists(path):
                 self.ds = xr.open_dataset(path)
@@ -185,7 +186,7 @@ class Experiment():
 
     def plot_EKE(self, **kw):
         self.EKE.isel(deptht=0,xT=slice(1,-1), yT=slice(1,-1)).plot.contourf(x='lonT', y='latT', 
-            levels=15, vmin=0, cmap=cmocean.cm.balance, 
+            levels=np.linspace(0,0.3,11), vmin=0, cmap=cmocean.cm.balance, 
             vmax=0.4,  aspect=1, size=4, 
             cbar_kwargs = {'label': 'EKE, $m^2/s^2$'}, **kw)
         plt.gca().set_aspect(aspect=1)
@@ -205,15 +206,16 @@ class Experiment():
         plt.xlim(0 , 0.03)
         plt.ylim(4000, 5)
         plt.title('Lateral mean EKE')
+        plt.xticks([0,0.005,0.01,0.015,0.02,0.025,0.03],['0','0.005','0.01','0.015', '0.02', '0.025', '0.03']);
     
     def plot_SST(self, **kw):
         T = self.T.isel(deptht=0).isel(xT=slice(1,-1), yT=slice(1,-1))
         T.plot.contourf(x='lonT', y='latT', 
-            levels=np.arange(8,30,2), vmin=11, vmax=24, 
+            levels=np.arange(8,30,1), vmin=11, vmax=24, 
             cmap=cmocean.cm.balance, aspect=1, size=4, 
             cbar_kwargs = {'label': 'SST, $^oC$'}, **kw)
         Cplot = T.plot.contour(x='lonT', y='latT',
-            levels=np.arange(8,30,2), colors='k', linewidths=0.5)
+            levels=np.arange(8,30,1), colors='k', linewidths=0.5)
         plt.gca().set_aspect(aspect=1)
         plt.gca().clabel(Cplot, Cplot.levels)
         plt.xlabel('Longitude')
