@@ -18,6 +18,8 @@ class Experiment():
             if os.path.exists(path):
                 self.ds = xr.open_dataset(path)
                 if j==0:
+                    if len(self.ds.time_counter) != 30:
+                        print('Error: wrong number of time snapshots for experiment in folder ', folder)
                     self.ds = self.ds.isel(time_counter=slice(-20,None)).mean(dim='time_counter')
                 else:
                     self.ds = self.ds.isel(time_counter=slice(-1,None)).mean(dim='time_counter')
@@ -180,7 +182,7 @@ class Experiment():
         y = (0,2120e+3)
         u = self.u_surf.sel(xT=slice(*x), yT=slice(*y))
         v = self.v_surf.sel(xT=slice(*x), yT=slice(*y))
-        print(u.shape, v.shape)
+        #print(u.shape, v.shape)
         u = u - u.mean('time_counter')
         v = v - v.mean('time_counter')
         return compute_isotropic_KE(u.drop(['latT', 'lonT']), v.drop(['latT', 'lonT']), window=None, 
@@ -302,7 +304,7 @@ class Experiment():
         different resolution
         '''
         d = {}
-        for key in ['MOC', 'heat_flux2d', 'heat_flux', 'SST', 'SSH', 'uzonal_barotropic', 'uzonal_section', 'EKEs', 'EKEz']:
+        for key in ['MOC', 'heat_flux2d', 'heat_flux', 'SST', 'SSH', 'uzonal_section', 'Tzonal_section', 'EKEs', 'EKEz', 'EKE_spectrum']:
               d[key] = self.lk_error(self.__getattribute__(key), target.__getattribute__(key))
 
         d['EKE_ratio'] = self.EKE_level / target.EKE_level
@@ -337,6 +339,7 @@ class Experiment():
         self.EKE.isel(deptht=0,xT=slice(1,-1), yT=slice(1,-1)).plot.contourf(x='lonT', y='latT', 
             levels=np.linspace(0,0.3,11), vmin=0, cmap=cmocean.cm.balance, 
             vmax=0.4,
+            
             cbar_kwargs = {'label': 'EKE, $m^2/s^2$'}, **kw)
         plt.gca().set_aspect(aspect=1)
         plt.xlabel('Longitude')
@@ -366,16 +369,26 @@ class Experiment():
         '''
         if target is None:
             T = self.T
+            levels = np.arange(11,25,1)
+            cmap = cmocean.cm.thermal
+            ticks=levels[::2]
+            font=14
         else:
             T = self.T - remesh(target.T,self.T)
+            levels = [-1.8, -1.4, -1.0, -0.6,-0.2,0.2, 0.6, 1.0, 1.4, 1.8]
+            cmap = cmocean.cm.balance
+            ticks=levels
+            font=14
         T = T.isel(deptht=0).isel(xT=slice(1,-1), yT=slice(1,-1))
-
-        levels = np.arange(8,30,1) if target is None else np.linspace(-3,3,11)
         
-        T.plot.contourf(x='lonT', y='latT', 
-            levels=levels, vmin=11, vmax=24, 
-            cmap=cmocean.cm.balance,
-            cbar_kwargs = {'label': 'SST, $^oC$'}, **kw)
+        im = T.plot.contourf(x='lonT', y='latT', 
+            levels=levels,
+            vmin=-200, vmax=200,
+            extend='both',
+            cmap=cmap,
+            add_colorbar=False, **kw)
+        cb = plt.colorbar(im, label='SST, $^oC$', ticks=ticks)
+        cb.ax.tick_params(labelsize=font)
         Cplot = T.plot.contour(x='lonT', y='latT',
             levels=levels, colors='k', linewidths=0.5)
         plt.gca().set_aspect(aspect=1)
@@ -387,16 +400,23 @@ class Experiment():
     def plot_SSH(self, target=None, **kw):
         if target is None:
             T = self.SSH
+            levels = np.linspace(-0.6,0.6,9)
+            font = 14
         else:
             T = self.SSH - remesh(target.SSH,self.SSH)
+            levels = np.linspace(-0.55,0.55,12)
+            font=10
 
         T = T.isel(xT=slice(1,-1), yT=slice(1,-1))
-        T.plot.contourf(x='lonT', y='latT', 
-            levels=np.linspace(-0.6,0.6,9),
+        im = T.plot.contourf(x='lonT', y='latT', 
+            levels=levels,
             cmap=cmocean.cm.balance,
-            cbar_kwargs = {'label': 'SSH, $m$'}, **kw)
+            extend='both',
+            add_colorbar=False, **kw)
+        cb = plt.colorbar(im, label='SSH, $m$', ticks=levels)
+        cb.ax.tick_params(labelsize=font)
         Cplot = T.plot.contour(x='lonT', y='latT',
-            levels=np.linspace(-0.6,0.6,9), colors='k', linewidths=0.5)
+            levels=levels, colors='k', linewidths=0.5)
         plt.gca().set_aspect(aspect=1)
         plt.gca().clabel(Cplot, Cplot.levels)
         plt.xlabel('Longitude')
@@ -413,6 +433,7 @@ class Experiment():
         uzonal.plot.contourf(x='lonT', y='latT', 
             levels=np.linspace(-0.1,0.1,9),
             cmap=cmocean.cm.balance,
+            
             cbar_kwargs = {'label': 'Barotropic zonal velocity, $m/s$'})
         #Cplot = uzonal.plot.contour(x='lonU', y='latU',
         #    levels=np.linspace(-0.1,0.1,9), colors='k', linewidths=0.5)
@@ -433,6 +454,7 @@ class Experiment():
         heat_flux2d.plot.contourf(
                 x='lat', y='depth', levels=np.linspace(-2.5e+11,2.5e+11,11),
                 vmin=-2.5e+11, vmax=2.5e+11, cmap=cmocean.cm.balance,
+                
                 cbar_kwargs = {'label': 'Eddy Meridional Heat Flux, $W/m$'})
         Cplot = MOC.plot.contour(x='lat', y='depth', levels=np.linspace(-5,5,21), colors='k', linewidths=0.5)
         plt.gca().clabel(Cplot, 
@@ -453,6 +475,7 @@ class Experiment():
         uzonal.plot.contourf(x='lat', y='depth',
             levels=np.linspace(-0.4,0.4,17),
             cmap=cmocean.cm.balance,
+            
             cbar_kwargs = {'label': 'Zonal velocity, $m/s$'})
         Cplot = uzonal.plot.contour(x='lat', y='depth',
             levels=np.linspace(-0.4,0.4,17), colors='k', linewidths=0.5)
@@ -465,22 +488,24 @@ class Experiment():
         plt.xlabel('Latitude at 75W')
         plt.ylabel('Depth, m')
 
-    def plot_Tzonal_section(self, target):
+    def plot_Tzonal_section(self, target=None):
         levels=np.arange(4,25,2)
         self.Tzonal_section.plot.contourf(x='lat', y='depth',
             levels=levels,
             cmap=cmocean.cm.balance,
+            
             cbar_kwargs = {'label': 'Temperature, $^oC$'})
-        Cplot = target.Tzonal_section.plot.contour(x='lat', y='depth',
-            levels=levels, colors='k', linewidths=0.5, linestyles='-')
-        plt.gca().clabel(Cplot, Cplot.levels[0:None:2])
+        if target is not None:
+            Cplot = target.Tzonal_section.plot.contour(x='lat', y='depth',
+                levels=levels, colors='k', linewidths=0.5, linestyles='-')
+            plt.gca().clabel(Cplot, Cplot.levels[0:None:2])
+            plt.plot(np.nan,np.nan,ls='-',color='k', lw=1, label='$1/9^o$')
+            plt.legend(loc='lower right')
         plt.ylim(700,0)
         plt.xticks([20,25,30,35,40])
         plt.yticks([0, 200, 400, 600, 800], ['0', '200', '400', '600', '800'])
         plt.xlabel('Latitude at 72W')
         plt.ylabel('Depth, m')
-        plt.plot(np.nan,np.nan,ls='-',color='k', lw=1, label='$1/9^o$')
-        plt.legend(loc='lower right')
         
 def lon(field):
     for lon_out in ['lonT', 'lonU', 'lonV']:
