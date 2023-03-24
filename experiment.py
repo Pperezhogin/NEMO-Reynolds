@@ -5,6 +5,7 @@ import numpy as np
 import cmocean
 from functools import cached_property
 from scipy import interpolate
+import xrft
 
 class Experiment():
     def __init__(self, folder):
@@ -20,6 +21,26 @@ class Experiment():
                     self.ds = self.ds.isel(time_counter=slice(-20,None)).mean(dim='time_counter')
                 else:
                     self.ds = self.ds.isel(time_counter=slice(-1,None)).mean(dim='time_counter')
+        
+        for file in ['GYRE_5d_00010101_00301230_surf.nc',
+                     'ssh.nc']:
+            path = os.path.join(folder, file)
+            if os.path.exists(path):
+                self.surf = xr.open_dataset(path)
+                if file == 'ssh.nc':
+                    self.surf = self.surf.coarsen(time_counter=5, boundary='trim').mean().rename(
+                    {'nav_lat_grid_T': 'latT', 'nav_lon_grid_T': 'lonT',
+                    'x_grid_T': 'xT', 'y_grid_T': 'yT'}
+                    )
+                else:
+                    self.surf = self.surf.rename(
+                    {'nav_lat': 'latT', 'nav_lon': 'lonT',
+                    'x': 'xT', 'y': 'yT'}
+                )
+                if len(self.surf.time_counter) == 75:
+                    self.surf = self.surf.isel(time_counter=slice(0,72))
+                elif len(self.surf.time_counter) > 1000:
+                    self.surf = self.surf.isel(time_counter=slice(-72,None))
 
         if len(self.ds.x_grid_T) == 122:
             self.mask = xr.open_dataset('mesh_mask_R4.nc')
@@ -40,6 +61,9 @@ class Experiment():
         self.ds['yT'] = self.ds['yT'] * dx - dx/2
         self.ds['yU'] = self.ds['yU'] * dx - dx/2
         self.ds['yV'] = self.ds['yV'] * dx
+
+        self.surf['xT'] = self.ds['xT']
+        self.surf['yT'] = self.ds['yT']
         return
     
     @property
@@ -77,6 +101,30 @@ class Experiment():
     @property
     def Tv(self):
         return self.ds.veltempy
+
+    @property
+    def u_surf(self):
+        # see https://os.copernicus.org/articles/15/477/2019/
+        dx = grid_step = float(self.mask.e1t[0,0,0])
+        ssh = self.surf.sossheig.data
+        g = 9.8
+        f = self.mask.ff.squeeze().data
+        u = 0*ssh
+        u[:,:-1,:] = - (ssh[:,1:,:] - ssh[:,:-1,:]) / dx
+        u = u * g / f
+        return u + self.surf.sossheig*0
+    
+    @property
+    def v_surf(self):
+        # see https://os.copernicus.org/articles/15/477/2019/
+        dx = grid_step = float(self.mask.e1t[0,0,0])
+        ssh = self.surf.sossheig.data
+        g = 9.8
+        f = self.mask.ff.squeeze().data
+        v = 0*ssh
+        v[:,:,:-1] = (ssh[:,:,1:] - ssh[:,:,:-1]) / dx
+        v = v * g / f
+        return v + self.surf.sossheig*0
     
     @property
     def uzonal_barotropic(self):
@@ -124,6 +172,19 @@ class Experiment():
     @property
     def EKE_level(self):
         return float(self.mean_z(self.EKEz).values)
+    
+    @property
+    def EKE_spectrum(self):
+        #x=(500e+3,1500e+3); y=(1000e+3,2000e+3)
+        x = (0,3180e+3)
+        y = (0,2120e+3)
+        u = self.u_surf.sel(xT=slice(*x), yT=slice(*y))
+        v = self.v_surf.sel(xT=slice(*x), yT=slice(*y))
+        print(u.shape, v.shape)
+        u = u - u.mean('time_counter')
+        v = v - v.mean('time_counter')
+        return compute_isotropic_KE(u.drop(['latT', 'lonT']), v.drop(['latT', 'lonT']), window=None, 
+        nfactor=2, truncate=True, detrend='linear', window_correction=False).mean('time_counter')
     
     @cached_property
     def MOC(self):
@@ -491,3 +552,15 @@ def remesh(field, target):
         out[depth(target)] = target[depth(target)]
     
     return out
+
+def compute_isotropic_KE(u, v, window='hann', 
+        nfactor=2, truncate=True, detrend='linear', window_correction=True):
+    
+    Eu = xrft.isotropic_power_spectrum(u, dim=('xT','yT'), window=window, nfactor=nfactor, 
+        truncate=truncate, detrend=detrend, window_correction=window_correction)
+    Ev = xrft.isotropic_power_spectrum(v, dim=('xT','yT'), window=window, nfactor=nfactor, 
+        truncate=truncate, detrend=detrend, window_correction=window_correction)
+
+    E = (Eu+Ev) / 2 # because power spectrum is twice the energy
+    E['freq_r'] = E['freq_r']*2*np.pi # because library returns frequencies, but not wavenumbers
+    return E

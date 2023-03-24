@@ -27,7 +27,7 @@ def create_animation(fun, idx, filename='my-animation.gif', dpi=200, FPS=18, loo
     os.system('rm .frame.png')
     # How long to persist one frame in milliseconds to have a desired FPS
     duration = 1000 / FPS
-    print(f'Animation at FPS={FPS} will last for {len(idx)/FPS} seconds')
+    print(f'Animation {filename} at FPS={FPS} will last for {len(idx)/FPS} seconds')
     frames[0].save(
         filename, format='GIF',
         append_images=frames[1:],
