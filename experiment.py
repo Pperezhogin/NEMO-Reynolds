@@ -83,20 +83,25 @@ class Experiment():
         U = (remesh(self.u,self.T) - remesh(self.v,self.T)) / np.sqrt(2)
         return self.mean_z(U)
     
-    @cached_property
-    def uzonal_section(self):
-        U = (remesh(self.u,self.T) - remesh(self.v,self.T)) / np.sqrt(2)
-        x = U.lonT.data
-        y = U.latT.data
-        z = U.data
+    def zonal_section(self, field, Lon=-75, Lat=np.linspace(20,40,100)):
+        x = field[lon(field)].data
+        y = field[lat(field)].data
+        z = field.data
 
-        Lat = np.linspace(20,40,100)
-        Lon = -75
         u = np.zeros((z.shape[0],Lat.shape[0]))
         for k in range(z.shape[0]):
             f = interpolate.LinearNDInterpolator(list(zip(x.ravel(),y.ravel())),z[k].ravel())
             u[k,:] = f(Lon,Lat)
-        return xr.DataArray(u, dims=('depth', 'lat'), coords={'lat': Lat, 'depth': U.deptht.data})
+        return xr.DataArray(u, dims=('depth', 'lat'), coords={'lat': Lat, 'depth': field.deptht.data})
+    
+    @cached_property
+    def uzonal_section(self):
+        U = (remesh(self.u,self.T) - remesh(self.v,self.T)) / np.sqrt(2)
+        return self.zonal_section(U, Lon=-75, Lat=np.linspace(20,40,100))
+    
+    @cached_property
+    def Tzonal_section(self):
+        return self.zonal_section(self.T, Lon=-72, Lat=np.linspace(20,40,100))
     
     @cached_property
     def vabs(self):
@@ -398,6 +403,23 @@ class Experiment():
         plt.yticks([0, 200, 400, 600, 800, 1000], ['0', '200', '400', '600', '800', '1000'])
         plt.xlabel('Latitude at 75W')
         plt.ylabel('Depth, m')
+
+    def plot_Tzonal_section(self, target):
+        levels=np.arange(4,25,2)
+        self.Tzonal_section.plot.contourf(x='lat', y='depth',
+            levels=levels,
+            cmap=cmocean.cm.balance,
+            cbar_kwargs = {'label': 'Temperature, $^oC$'})
+        Cplot = target.Tzonal_section.plot.contour(x='lat', y='depth',
+            levels=levels, colors='k', linewidths=0.5, linestyles='-')
+        plt.gca().clabel(Cplot, Cplot.levels[0:None:2])
+        plt.ylim(700,0)
+        plt.xticks([20,25,30,35,40])
+        plt.yticks([0, 200, 400, 600, 800], ['0', '200', '400', '600', '800'])
+        plt.xlabel('Latitude at 72W')
+        plt.ylabel('Depth, m')
+        plt.plot(np.nan,np.nan,ls='-',color='k', lw=1, label='$1/9^o$')
+        plt.legend(loc='lower right')
         
 def lon(field):
     for lon_out in ['lonT', 'lonU', 'lonV']:
