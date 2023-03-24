@@ -63,6 +63,14 @@ class Experiment():
         return self.ds.votemper
     
     @property
+    def SST(self):
+        return self.T.isel(deptht=0)
+    
+    @property
+    def SSH(self):
+        return self.ds.sossheig
+    
+    @property
     def Tu(self):
         return self.ds.veltempx
     
@@ -104,9 +112,16 @@ class Experiment():
     def EKEz(self):
         return self.EKE.isel(xT=slice(1,-1), yT=slice(1,-1)).mean(['xT', 'yT'])
     
+    @property
+    def EKEs(self):
+        return self.EKE.isel(deptht=0)
+    
+    @property
+    def EKE_level(self):
+        return float(self.mean_z(self.EKEz).values)
+    
     @cached_property
     def MOC(self):
-        print('Computing MOC!')
         Vmerid = self.meridional_flux(self.u, self.v)
         Psi = 0 * Vmerid
 
@@ -120,7 +135,6 @@ class Experiment():
     
     @cached_property
     def heat_flux2d(self):
-        print('Computing heat flux!')
         Qx = self.Tu.data - self.u.data * T_to_u(self.T.data)
         Qy = self.Tv.data - self.v.data * T_to_v(self.T.data)
         
@@ -186,6 +200,47 @@ class Experiment():
         
         Q = self.integrate_z(self.meridional_flux(u,v))
         print('Typical value should be 1e-7, ', np.max(np.abs(Q)).data)
+
+    def lk_error(self, field, target, k=2):
+        dd = depth(field)
+        xx = x(field)
+        yy = y(field)
+
+        if xx is not None:
+            error= field - remesh(target,field)
+        else:
+            error = field - target
+        
+        if dd is not None:
+            if k > 0:
+                e3t = self.mask.e3t_1d.squeeze().rename({'z': dd})
+                error = error * e3t
+                e3t = e3t.isel({dd: slice(0,-1)})
+            error = error.isel({dd: slice(0,-1)})
+        if xx is not None:
+            error = error.isel({xx: slice(1,-1)})
+        if yy is not None:
+            error = error.isel({yy: slice(1,-1)})
+
+        if k > 0:
+            out = ((np.abs(error)**k).mean())**(1./k)
+            if dd is not None:
+                out = out /  ((np.abs(e3t)**k).mean())**(1./k)
+        else:
+            out = np.abs(error).max()
+        return float(out.values)
+
+    def error(self, target):
+        '''
+        target is the reference experiment with probably 
+        different resolution
+        '''
+        d = {}
+        for key in ['MOC', 'heat_flux2d', 'heat_flux', 'SST', 'SSH', 'uzonal_barotropic', 'uzonal_section', 'EKEs', 'EKEz']:
+              d[key] = self.lk_error(self.__getattribute__(key), target.__getattribute__(key))
+
+        d['EKE_ratio'] = self.EKE_level / target.EKE_level
+        return d
         
     def plot_2D(self, var, **kw):
         if isinstance(var,str):
@@ -203,8 +258,6 @@ class Experiment():
             pass
 
         field = field.isel({x(field): slice(1,-1), y(field): slice(1,-1)})
-
-        print(field.shape)
         
         fun = field.plot.contourf if 'levels' in kw else field.plot
 
@@ -229,14 +282,15 @@ class Experiment():
         plt.title('Depth-averaged EKE')
 
     def plot_EKEz(self, **kw):
-        plt.semilogy(self.EKEz, self.EKEz.deptht, **kw)
+        plt.plot(self.EKEz, self.EKEz.deptht, **kw)
         plt.xlabel('EKE, $m^2/s^2$')
         plt.ylabel('depth, $m$')
         plt.grid()
         plt.xlim(0 , 0.03)
-        plt.ylim(4000, 5)
+        plt.ylim(4000, -100)
         plt.title('Lateral mean EKE')
         plt.xticks([0,0.005,0.01,0.015,0.02,0.025,0.03],['0','0.005','0.01','0.015', '0.02', '0.025', '0.03']);
+        plt.yticks([0, 1000, 2000, 3000, 4000], ['0', '1000', '2000', '3000', '4000'])
     
     def plot_SST(self, target=None, **kw):
         '''
@@ -266,9 +320,9 @@ class Experiment():
 
     def plot_SSH(self, target=None, **kw):
         if target is None:
-            T = self.ds.sossheig
+            T = self.SSH
         else:
-            T = self.ds.sossheig - remesh(target.ds.sossheig,self.ds.sossheig)
+            T = self.SSH - remesh(target.SSH,self.SSH)
 
         T = T.isel(xT=slice(1,-1), yT=slice(1,-1))
         T.plot.contourf(x='lonT', y='latT', 
@@ -361,19 +415,19 @@ def x(field):
     for x_out in ['xT', 'xU', 'xV']:
         if x_out in field.dims:
             break
-    return x_out
+    return x_out if x_out in field.dims else None
 
 def y(field):
     for y_out in ['yT', 'yU', 'yV']:
         if y_out in field.dims:
             break
-    return y_out
+    return y_out if y_out in field.dims else None
 
 def depth(field):
     for depth_out in ['deptht', 'depthu', 'depthv', 'depth']:
         if depth_out in field.coords:
             break
-    return depth_out
+    return depth_out if depth_out in field.dims else None
 
 def coords(field):
     return lon(field), lat(field), depth(field)
@@ -395,15 +449,23 @@ def T_to_v(T):
 def remesh(field, target):
     x_out, y_out = x(target), y(target)
     x_in, y_in = x(field), y(field)
-    nfactor = int(np.floor(field[x_in].shape[0]/target[x_out].shape[0]))
+
+    if x_in is not None:
+        nfactor = int(np.floor(field[x_in].shape[0]/target[x_out].shape[0]))
+    else:
+        nfactor = -1
+
     if nfactor > 1:
-        field = field.fillna(0).coarsen({x_in: nfactor, y_in: nfactor}, boundary='pad').mean()
+        field = field.isel({x_in:slice(1,-1), y_in:slice(1,-1)}).coarsen({x_in: nfactor, y_in: nfactor}).mean()
         x_in, y_in = x(field), y(field)
 
-    out = field.interp({x_in: target[x_out], y_in: target[y_out]}, method='linear').fillna(0)
-    out[lat(target)] = target[lat(target)]
-    out[lon(target)] = target[lon(target)]
+    out = field # just initialization
+    if x_in is not None:
+        out = field.interp({x_in: target[x_out], y_in: target[y_out]}, method='linear').fillna(0)
+        out[lat(target)] = target[lat(target)]
+        out[lon(target)] = target[lon(target)]
     if depth(field) in field.coords:
         out = out.rename({depth(out): depth(target)})
         out[depth(target)] = target[depth(target)]
+    
     return out
